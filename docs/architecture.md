@@ -2,7 +2,7 @@
 
 ## Overview
 
-The BBox Annotation Tool follows a modular architecture that separates concerns into specialized handler classes. This design improves maintainability and makes the code easier to understand and modify.
+The BBox Annotation Tool follows a modular architecture that separates concerns into specialized handler classes and controllers. This design improves maintainability and makes the code easier to understand and modify.
 
 ## Core Components
 
@@ -11,8 +11,9 @@ The BBox Annotation Tool follows a modular architecture that separates concerns 
 The main application window class that:
 - Creates and manages the UI
 - Handles user input events
-- Coordinates between different handlers
+- Coordinates between different handlers and controllers
 - Manages application-level settings and state
+- Handles application-wide keyboard shortcuts
 
 ### AnnotationHandler
 
@@ -54,45 +55,138 @@ Manages all label-related functionality:
 - `label_deleted`: Emitted when a label is removed
 - `label_renamed`: Emitted when a label is modified
 
-## Component Interactions
+### DrawingController
 
-### Annotation Creation Flow
-1. User draws a bbox in the UI
-2. BBoxAnnotationTool gets current label from LabelHandler
-3. BBoxAnnotationTool calls AnnotationHandler to create annotation
-4. AnnotationHandler emits signals to update UI
+Manages drawing mode operations:
+- Tracks the current drawing state
+- Handles bbox creation workflow
+- Validates drawing coordinates
+- Emits signals when new bboxes are created
 
-### Label Update Flow
-1. User edits a label via UI
-2. BBoxAnnotationTool triggers LabelHandler dialog
-3. LabelHandler emits label_renamed signal
-4. AnnotationHandler updates affected annotations
-5. UI updates reflect changes
+**Key Methods:**
+- `start_drawing(point)`: Begin drawing a new bbox
+- `update_drawing(point)`: Update current bbox coordinates
+- `finish_drawing(point, label)`: Complete the bbox and create annotation
+- `get_current_bbox()`: Get coordinates of bbox being drawn
 
-### Save/Load Flow
-1. User triggers save/load action
-2. BBoxAnnotationTool delegates to AnnotationHandler
-3. AnnotationHandler manages file operations
-4. UI updates based on emitted signals
+**Signals:**
+- `bbox_created`: Emitted when a new bbox is completed
+
+### EditingController
+
+Manages edit mode operations:
+- Handles bbox modification
+- Controls dragging and resizing operations
+- Manages control points for bbox manipulation
+
+**Key Methods:**
+- `start_dragging(point, bbox_index, control_point)`: Begin drag operation
+- `update_dragging(point, annotations)`: Update bbox during drag
+- `finish_dragging()`: Complete the modification
+
+**Signals:**
+- `bbox_modified`: Emitted when a bbox is modified
+
+### ImageRenderer
+
+Handles all image rendering operations:
+- Renders annotations on images
+- Handles preview during drawing
+- Manages appearance settings for visual elements
+- Coordinates coordinate transformations
+
+**Key Methods:**
+- `render_image()`: Render image with current annotations
+- `render_preview()`: Show live preview during drawing
+- `apply_appearance_settings()`: Update visual styling
+
+### UI Components
+
+#### ImagePanel
+
+Manages the image display area:
+- Displays the current image
+- Handles mouse interactions for drawing/editing
+- Manages zoom and pan operations
+- Emits navigation signals
+
+**Key Signals:**
+- `mode_changed`: When switching draw/edit modes
+- `navigate_requested`: When image navigation is needed
+- `update_needed`: When display needs refresh
+
+#### LabelPanel
+
+Manages the label interface:
+- Shows list of annotations in current image
+- Provides label selection interface
+- Shows file list for navigation
+- Manages label grouping options
+
+**Key Features:**
+- Label list with grouping support
+- File navigation list
+- Current label selection
+- Label editing interface
+
+## Signal Flow Architecture
+
+### UI Event Flow
+1. User interacts with UI (mouse/keyboard)
+2. UI components emit signals
+3. Main window coordinates between handlers
+4. Controllers process operations
+5. Handlers update state
+6. ImageRenderer updates display
+
+### Data Flow
+1. AnnotationHandler manages data state
+2. LabelHandler tracks label state
+3. Controllers modify data through handlers
+4. UI reflects changes through signals
+5. ImageRenderer provides visual feedback
+
+## File Structure
+
+```
+bboxanntool/
+├── __init__.py
+├── ann_handler.py     # Annotation management
+├── app.py            # Main window and coordination
+├── appearance.py     # Appearance settings
+├── controllers.py    # Drawing and editing controllers
+├── label_handler.py  # Label management
+├── logger.py         # Logging system
+├── rendering.py      # Image rendering
+└── ui/
+    ├── __init__.py
+    ├── image_panel.py  # Image display component
+    └── label_panel.py  # Label interface component
+```
 
 ## Benefits of This Architecture
 
 1. **Separation of Concerns**
-   - Each handler has a specific responsibility
-   - Changes to one component don't affect others
-   - Easier to test individual components
+   - Each component has a clear, single responsibility
+   - Logic is separated into appropriate controllers
+   - UI components are independent of business logic
 
 2. **Reduced Complexity**
-   - Main window class focuses on UI
-   - Logic is organized by functionality
-   - Clear boundaries between components
+   - Main window focuses on coordination
+   - Controllers handle specific interaction modes
+   - Rendering is separated from state management
 
 3. **Improved Maintainability**
-   - Localized changes for new features
-   - Better error isolation
-   - Easier to add new functionality
+   - Modular design makes changes easier
+   - Clear boundaries between components
+   - Each component can be tested independently
 
 4. **Better State Management**
-   - Clear ownership of data
-   - Predictable update patterns
-   - Consistent state across UI
+   - Clear ownership of different types of data
+   - Well-defined signal paths for updates
+   - Consistent state handling across components
+
+5. **Enhanced Extensibility**
+   - New features can be added in isolated components
+   - UI can be modified without affecting logic
+   - New controllers can be added for new modes

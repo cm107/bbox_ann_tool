@@ -48,27 +48,60 @@ Logs can be viewed directly in the application:
 
 ## Log Format
 ```
-[TIMESTAMP] [LEVEL] [COMPONENT] Message
+[TIMESTAMP] [LEVEL] [CATEGORY] [COMPONENT] Message
 
 Examples:
-[2025-07-12 10:15:30] [INFO] [Session] === Application Started ===
-[2025-07-12 10:15:30] [INFO] [System] Python Version: 3.12.2
-[2025-07-12 10:15:30] [INFO] [System] Application Version: 0.1.0
-[2025-07-12 10:15:30] [INFO] [System] Qt Version: 5.15.17
-[2025-07-12 10:15:30] [INFO] [System] PyQt5 Version: 5.15.11
-[2025-07-12 10:15:30] [INFO] [System] OpenCV Version: 4.9.0
-[2025-07-12 10:15:30] [INFO] [FileOps] Saved annotations to: example.json
-[2025-07-12 10:20:45] [INFO] [Session] === Application Shutting Down ===
+[2025-07-12 10:15:30] [INFO] [Session] [BBoxAnnotationTool] Application Started
+[2025-07-12 10:15:35] [INFO] [FileOps] [AnnotationHandler] Loading annotations from: example.json
+[2025-07-12 10:15:40] [INFO] [UI] [LabelHandler] Updated label list: 5 items
 ```
 
 ## Log Components
 
-### Session
+### Main Components
+
+#### BBoxAnnotationTool
+The main application window, handles:
+- Application lifecycle events
+- UI interactions
+- Image loading and display
+- Overall application state
+
+#### AnnotationHandler
+Manages annotation data and operations:
+- Loading/saving annotations
+- BBOX modifications
+- Selection state
+- Annotation validation
+
+#### LabelHandler
+Handles label-related functionality:
+- Label list management
+- Label editing
+- Label validation
+- Group operations
+
+#### DrawingController
+Handles drawing mode operations:
+- Logging of bbox creation
+- Drawing state tracking
+- Coordinate validation
+
+#### EditingController
+Handles editing mode operations:
+- Logging of bbox modifications
+- Control point interactions
+- Resize and move operations
+
+### Log Categories
+
+#### Session
 Tracks application lifecycle:
 - Application start
 - Application shutdown
+- Version information
 
-### System
+#### System
 Records system information at startup:
 - Python version
 - Application version
@@ -76,25 +109,36 @@ Records system information at startup:
 - PyQt5 version
 - OpenCV version
 
-### FileOps
+#### FileOps
 Tracks file operations:
 - Opening/saving files
 - Directory changes
 - Image loading
+- Annotation file handling
 
-### UI
+#### UI
 User interface events:
 - Mode changes
 - Window resizing
 - Settings updates
+- Display updates
 
-### Annotations
+#### Annotations
 Annotation-related operations:
-- Creating bounding boxes
-- Editing labels
-- Deleting annotations
+- Creating bounding boxes (DrawingController)
+- Editing coordinates (EditingController)
+- Label assignments
+- Deletion operations
 
-### Input
+#### Input
 User input handling:
 - Mouse events
 - Keyboard shortcuts
+- Drawing operations
+
+## Debugging with Logs
+When debugging issues:
+1. Look for the component name in brackets (e.g., [BBoxAnnotationTool], [AnnotationHandler])
+2. Check the category to understand the type of operation
+3. Follow the sequence of events across components
+4. Use log levels to filter severity

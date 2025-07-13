@@ -9,7 +9,11 @@
 - `E`: Switch to Edit Mode
 - `Esc`: Cancel current selection/action
 
-Note: Keyboard shortcuts are disabled when text input fields have focus.
+## Navigation Shortcuts
+- `Right Arrow` or `Down Arrow`: Next image
+- `Left Arrow` or `Up Arrow`: Previous image
+
+Note: Keyboard shortcuts work anywhere in the application unless a text input field has focus.
 
 ## Mouse Controls
 

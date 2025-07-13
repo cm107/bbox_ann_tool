@@ -16,7 +16,7 @@ class BBoxLogger(QObject):
         self.logger = logging.getLogger('bbox_tool')
         if not self.logger.handlers:
             self.setup_logger()
-        
+
     def setup_logger(self):
         """Configure logger with file and stream handlers."""
         self.logger.setLevel(logging.DEBUG)
@@ -36,7 +36,7 @@ class BBoxLogger(QObject):
         
         # Create formatter and add it to the handlers
         formatter = logging.Formatter(
-            '[%(asctime)s] [%(levelname)s] [%(component)s] %(message)s',
+            '[%(asctime)s] [%(levelname)s] [%(category)s] [%(component)s] %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         file_handler.setFormatter(formatter)
@@ -45,26 +45,43 @@ class BBoxLogger(QObject):
         # Add handlers to the logger
         self.logger.addHandler(file_handler)
         self.logger.addHandler(stream_handler)
-
-    def debug(self, message, component="General"):
+        
+    def debug(self, message, category="General"):
         """Log a debug message."""
-        self.logger.debug(message, extra={'component': component})
+        self.logger.debug(message, extra={'category': category, 'component': self._get_caller_name()})
         
-    def info(self, message, component="General"):
+    def info(self, message, category="General"):
         """Log an info message."""
-        self.logger.info(message, extra={'component': component})
+        self.logger.info(message, extra={'category': category, 'component': self._get_caller_name()})
         
-    def warning(self, message, component="General"):
+    def warning(self, message, category="General"):
         """Log a warning message."""
-        self.logger.warning(message, extra={'component': component})
+        self.logger.warning(message, extra={'category': category, 'component': self._get_caller_name()})
         
-    def error(self, message, component="General"):
+    def error(self, message, category="General"):
         """Log an error message."""
-        self.logger.error(message, extra={'component': component})
+        self.logger.error(message, extra={'category': category, 'component': self._get_caller_name()})
         
     def status(self, message):
         """Show a temporary status message in the status bar."""
         self.status_message.emit(message)
+
+    def _get_caller_name(self):
+        """Get the name of the component that called the logger."""
+        import inspect
+        frame = inspect.currentframe()
+        # Go up 3 frames to get to the actual caller (above debug/info/warning/error methods)
+        for _ in range(3):
+            if frame.f_back is not None:
+                frame = frame.f_back
+        try:
+            # Get the class name of the caller
+            if 'self' in frame.f_locals:
+                return frame.f_locals['self'].__class__.__name__
+            else:
+                return "Unknown"
+        finally:
+            del frame  # Prevent reference cycles
 
 class LogViewerDialog(QDialog):
     def __init__(self, parent=None):

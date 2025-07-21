@@ -9,6 +9,12 @@ setup(
         "PyQt5>=5.15.9,<5.16.0",
         "opencv-python-headless>=4.9.0,<4.10.0",
     ],
+    extras_require={
+        "dev": [
+            "pytest>=7.0.0,<8.0.0",
+            "pytest-qt>=4.5.0",
+        ],
+    },
     entry_points={
         'console_scripts': [
             'bboxanntool=bboxanntool.app:main',

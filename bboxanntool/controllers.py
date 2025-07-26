@@ -1,15 +1,15 @@
 """Controllers for mouse interaction modes."""
 
 from PyQt5.QtCore import QObject, pyqtSignal
+from .logger import logger
 
 class DrawingController(QObject):
     """Controls drawing mode interactions."""
     bbox_created = pyqtSignal(list, str)  # bbox coordinates and label
 
-    def __init__(self, settings, logger=None):
+    def __init__(self, settings):
         super().__init__()
         self.settings = settings
-        self.logger = logger
         self.drawing = False
         self.start_point = None
         self.end_point = None
@@ -39,8 +39,8 @@ class DrawingController(QObject):
         x2, y2 = self.end_point
         bbox = [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
         self.bbox_created.emit(bbox, label)
-        if self.logger:
-            self.logger.info(f"[DrawingController] Created bbox {bbox} with label '{label}'", "Annotations")
+        if logger:
+            logger.info(f"[DrawingController] Created bbox {bbox} with label '{label}'", "Annotations")
         return True
 
     def get_current_bbox(self):
@@ -53,10 +53,9 @@ class EditingController(QObject):
     """Controls edit mode interactions."""
     bbox_modified = pyqtSignal(int, list)  # bbox index and new coordinates
 
-    def __init__(self, settings, logger=None):
+    def __init__(self, settings):
         super().__init__()
         self.settings = settings
-        self.logger = logger
         self.dragging = False
         self.drag_start = None
         self.selected_point = None
@@ -95,7 +94,7 @@ class EditingController(QObject):
         self.selected_point = selection
         
         # Store initial bbox for logging
-        if self.logger:
+        if logger:
             point_names = ['top-left', 'top-right', 'bottom-right', 'bottom-left', 'center']
             self.initial_bbox = point_idx, point_names[point_idx]
         return True
@@ -138,12 +137,12 @@ class EditingController(QObject):
 
     def finish_dragging(self):
         """Finish dragging operation."""
-        if self.dragging and self.logger and self.initial_bbox:
+        if self.dragging and logger and self.initial_bbox:
             point_idx, point_name = self.initial_bbox
             if point_idx == 4:
-                self.logger.info(f"[EditingController] Moved bbox {self.selected_point[0]} by dragging center point", "Annotations")
+                logger.info(f"[EditingController] Moved bbox {self.selected_point[0]} by dragging center point", "Annotations")
             else:
-                self.logger.info(f"[EditingController] Resized bbox {self.selected_point[0]} by dragging {point_name} point", "Annotations")
+                logger.info(f"[EditingController] Resized bbox {self.selected_point[0]} by dragging {point_name} point", "Annotations")
         
         self.dragging = False
         self.drag_start = None

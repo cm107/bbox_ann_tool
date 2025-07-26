@@ -4,14 +4,11 @@ from bboxanntool.ann_handler import AnnotationHandler
 
 @pytest.fixture
 def handler() -> AnnotationHandler:
-    """Fixture that provides an AnnotationHandler with dummy settings and logger."""
+    """Fixture that provides an AnnotationHandler with dummy settings."""
     class DummySettings:
         def value(self, key, default=None):
             return default
-    class DummyLogger:
-        def debug(self, *a, **k): pass
-        def error(self, *a, **k): pass
-    return AnnotationHandler(settings=DummySettings(), logger=DummyLogger())
+    return AnnotationHandler(settings=DummySettings())
 
 def test_add_annotation(handler: AnnotationHandler, qtbot: QtBot) -> None:
     """Test that adding an annotation updates the list and emits the annotations_changed signal."""
@@ -133,7 +130,7 @@ def test_save_and_load_annotations(tmp_path, handler: AnnotationHandler, qtbot: 
     handler.add_annotation([5, 6, 7, 8], "dog")
     assert handler.save_annotations() is True
     # Create a new handler to load
-    new_handler = AnnotationHandler(settings=handler.settings, logger=handler.logger)
+    new_handler = AnnotationHandler(settings=handler.settings)
     new_handler.get_annotation_path = lambda image_path=None: str(test_file)
     with qtbot.waitSignal(new_handler.annotations_changed, timeout=1000):
         new_handler.load_annotations("dummy_image.png")

@@ -9,10 +9,7 @@ def handler(qtbot) -> LabelHandler:
     class DummySettings:
         def value(self, key, default=None):
             return "output"
-    class DummyLogger:
-        def debug(self, *a, **k): pass
-        def error(self, *a, **k): pass
-    h = LabelHandler(settings=DummySettings(), logger=DummyLogger())
+    h = LabelHandler(settings=DummySettings())
     return h
 
 def test_current_label_property(handler: LabelHandler, qtbot: QtBot) -> None:
@@ -24,18 +21,12 @@ def test_current_label_property(handler: LabelHandler, qtbot: QtBot) -> None:
         handler.current_label = "dog"
     assert handler.current_label == "dog"
 
-def dummy_logger():
-    class DummyLogger:
-        def debug(self, *a, **k): pass
-        def error(self, *a, **k): pass
-    return DummyLogger()
-
 def test_get_all_unique_labels_empty(tmp_path, qtbot: QtBot) -> None:
     """Test get_all_unique_labels returns empty list if no files exist."""
     class DummySettings:
         def value(self, key, default=None):
             return str(tmp_path)
-    handler = LabelHandler(settings=DummySettings(), logger=dummy_logger())
+    handler = LabelHandler(settings=DummySettings())
     assert handler.get_all_unique_labels() == []
 
 def test_get_all_unique_labels(tmp_path: Path, qtbot: QtBot) -> None:
@@ -50,7 +41,7 @@ def test_get_all_unique_labels(tmp_path: Path, qtbot: QtBot) -> None:
     class DummySettings:
         def value(self, key, default=None):
             return str(tmp_path)
-    handler = LabelHandler(settings=DummySettings(), logger=dummy_logger())
+    handler = LabelHandler(settings=DummySettings())
     labels = handler.get_all_unique_labels()
     assert set(labels) == {"cat", "dog", "bird"}
 

@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import QMessageBox
 
 if TYPE_CHECKING:
     from .label_handler import LabelHandler
+from .logger import logger
 
 class AnnotationHandler(QObject):
     """
@@ -35,17 +36,16 @@ class AnnotationHandler(QObject):
     selection_changed = pyqtSignal(int, str)  # index, label
     unsaved_changes = pyqtSignal(bool)  # True when there are unsaved changes
     
-    def __init__(self, settings, logger, parent=None):
+    def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.settings = settings
-        self.logger = logger
         self.current_image_path = None
         self.annotations = []  # List of {"label": str, "bbox": [x1,y1,x2,y2]}
         self.selected_index = None
         self._has_unsaved_changes = False
         self._label_handler = None
                 
-        self.logger.debug("[AnnotationHandler] Initialized", "Init")
+        logger.debug("[AnnotationHandler] Initialized", "Init")
 
     def setup(self) -> None:
         """
@@ -59,10 +59,10 @@ class AnnotationHandler(QObject):
                     self._label_handler = child
                     break
             if not self._label_handler:
-                self.logger.error("[AnnotationHandler] Could not find LabelHandler", "Init")
+                logger.error("[AnnotationHandler] Could not find LabelHandler", "Init")
                 raise RuntimeError("[AnnotationHandler] Could not find LabelHandler in parent's children")
         
-        self.logger.debug("[AnnotationHandler] Setup complete", "Init")
+        logger.debug("[AnnotationHandler] Setup complete", "Init")
 
     @property
     def has_unsaved_changes(self) -> bool:

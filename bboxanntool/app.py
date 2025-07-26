@@ -21,6 +21,7 @@ from .logger import BBoxLogger, LogViewerDialog
 from .appearance import AppearanceDialog
 from .ann_handler import AnnotationHandler
 from .label_handler import LabelHandler
+from .image_handler import ImageHandler
 from .ui import ImagePanel, LabelPanel
 from .rendering import ImageRenderer
 from .controllers import DrawingController, EditingController
@@ -43,16 +44,17 @@ class BBoxAnnotationTool(QMainWindow):
                                 QSettings.Format.IniFormat)
         
         # Initialize handlers
-        self.label_handler = LabelHandler(self.settings, self.logger, self)
-        self.ann_handler = AnnotationHandler(self.settings, self.logger, self)
+        self.image_handler = ImageHandler(self)
+        self.label_handler = LabelHandler(self.settings, self)
+        self.ann_handler = AnnotationHandler(self.settings, self)
         
         # Initialize components
         self.renderer = ImageRenderer(self.settings)
-        self.drawing_controller = DrawingController(self.settings, self.logger)
-        self.editing_controller = EditingController(self.settings, self.logger)
+        self.drawing_controller = DrawingController(self.settings)
+        self.editing_controller = EditingController(self.settings)
         
         # Initialize state variables
-        self.original_image = None
+        # (ImageHandler now manages image state)
         
         # Set up UI and handlers
         self.init_ui()
@@ -110,6 +112,11 @@ class BBoxAnnotationTool(QMainWindow):
         self.label_handler.setup()
         self.ann_handler.setup()
         
+        # Connect image handler signals
+        self.image_handler.current_image_changed.connect(self.on_image_changed)
+        self.image_handler.current_image_path_changed.connect(self.on_image_path_changed)
+        self.image_handler.image_paths_changed.connect(self.on_image_paths_changed)
+        
         # Connect handler signals
         self.ann_handler.annotations_changed.connect(self.on_annotations_changed)
         self.ann_handler.bbox_modified.connect(self.update_display)
@@ -151,7 +158,12 @@ class BBoxAnnotationTool(QMainWindow):
         if file_path:
             try:
                 self.settings.setValue("last_image_dir", str(Path(file_path).parent))
-                self.load_image_file(file_path)
+                # Reset the ImageHandler and set single image
+                self.image_handler.reset()
+                self.image_handler._image_paths = [file_path]  # Set as single-image list
+                self.image_handler._image_index = 0
+                self.image_handler.current_image_path = file_path
+                # Update the file list to show just this image
                 self.label_panel.update_file_list([file_path])
                 self.logger.status(f"[BBoxAnnotationTool] Opened image: {Path(file_path).name}")
                 self.logger.info(f"[BBoxAnnotationTool] Loaded image file: {file_path}", "FileOps")
@@ -159,45 +171,20 @@ class BBoxAnnotationTool(QMainWindow):
                 self.logger.error(f"[BBoxAnnotationTool] Failed to load image {file_path}: {str(e)}", "FileOps")
                 QMessageBox.critical(self, "Error", f"Failed to load image: {str(e)}")
 
-    def load_image_file(self, image_path):
-        try:
-            self.original_image = cv2.imread(image_path)
-            if self.original_image is None:
-                raise ValueError("Failed to read image file")
-            
-            self.cancel_current_action()
-            self.ann_handler.load_annotations(image_path)
-            self.label_panel.update_used_labels(self.label_handler.get_all_unique_labels())
-            self.update_display()
-            
-            self.logger.debug(f"[BBoxAnnotationTool] Image loaded: {image_path}, size: {self.original_image.shape}", "Image")
-        except Exception as e:
-            self.logger.error(f"[BBoxAnnotationTool] Failed to load image file {image_path}: {str(e)}", "Image")
-            raise
-
     def open_directory(self):
         last_dir = self.settings.value("last_dir", str(Path.home()))
         dir_path = QFileDialog.getExistingDirectory(self, "Open Directory", last_dir)
         if dir_path:
             try:
                 self.settings.setValue("last_dir", dir_path)
-                image_files = []
-                for ext in ['*.png', '*.jpg', '*.jpeg', '*.bmp', '*.gif']:
-                    image_files.extend(Path(dir_path).glob(ext))
-                    image_files.extend(Path(dir_path).glob(ext.upper()))
-                file_list = [str(f) for f in image_files]
-                
-                # Get annotated files
-                annotated_files = set()
-                for file_path in file_list:
-                    if Path(self.ann_handler.get_annotation_path(file_path)).exists():
-                        annotated_files.add(file_path)
-                
-                self.label_panel.update_file_list(file_list, annotated_files)
-                self.logger.status(f"[BBoxAnnotationTool] Opened directory with {len(file_list)} images")
-                self.logger.info(f"[BBoxAnnotationTool] Loaded directory {dir_path} with {len(file_list)} images", "FileOps")
-                if not file_list:
+                self.image_handler.image_directory = dir_path
+                self.logger.status(f"[BBoxAnnotationTool] Opened directory with {len(self.image_handler.image_paths or [])} images")
+                self.logger.info(f"[BBoxAnnotationTool] Loaded directory {dir_path} with {len(self.image_handler.image_paths or [])} images", "FileOps")
+                if not self.image_handler.image_paths:
                     self.logger.warning(f"[BBoxAnnotationTool] No image files found in directory: {dir_path}", "FileOps")
+                else:
+                    # Automatically navigate to the first image
+                    self.image_handler.go_to_first_image()
             except Exception as e:
                 self.logger.error(f"[BBoxAnnotationTool] Failed to open directory {dir_path}: {str(e)}", "FileOps")
                 QMessageBox.critical(self, "Error", f"Failed to open directory: {str(e)}")
@@ -207,15 +194,24 @@ class BBoxAnnotationTool(QMainWindow):
             return
             
         file_name = item.text()
+        # If we have image paths loaded, find the full path and set the index
+        if self.image_handler.image_paths:
+            for index, path in enumerate(self.image_handler.image_paths):
+                if Path(path).name == file_name:
+                    self.image_handler.image_index = index  # This will also set the current_image_path
+                    return
+        
+        # Fallback to old method if not found in image_paths
         dir_path = Path(self.settings.value("last_dir", ""))
         image_path = str(dir_path / file_name)
-        self.load_image_file(image_path)
+        if Path(image_path).exists():
+            self.image_handler.current_image_path = image_path
 
     def save_annotations(self):
         """Save annotations using the AnnotationHandler"""
         if self.ann_handler.save_annotations():
             # Update file list icon
-            image_path = self.ann_handler.current_image_path
+            image_path = self.image_handler.current_image_path
             if image_path:
                 for i in range(self.label_panel.file_list.count()):
                     item = self.label_panel.file_list.item(i)
@@ -228,7 +224,8 @@ class BBoxAnnotationTool(QMainWindow):
 
     def update_display(self):
         """Update the display with current annotations."""
-        if self.original_image is None:
+        current_image = self.image_handler.current_image
+        if current_image is None:
             self.image_panel.display_image(None)
             return
 
@@ -236,7 +233,7 @@ class BBoxAnnotationTool(QMainWindow):
         if self.drawing_controller.drawing:
             start_point, end_point = self.drawing_controller.get_current_bbox()
             preview = self.renderer.render_preview(
-                self.original_image,
+                current_image,
                 self.ann_handler.annotations,
                 start_point,
                 end_point,
@@ -247,7 +244,7 @@ class BBoxAnnotationTool(QMainWindow):
 
         # Normal display with annotations
         image = self.renderer.render_image(
-            self.original_image,
+            current_image,
             self.ann_handler.annotations,
             self.label_handler.current_label,
             self.ann_handler.selected_index,
@@ -467,17 +464,24 @@ class BBoxAnnotationTool(QMainWindow):
                 self.logger.info(f"[BBoxAnnotationTool] Deleted {count_deleted} annotations with label: {label}", "Annotations")
 
     def navigate_to_image(self, direction):
-        """Navigate to next/previous image in the file list
+        """Navigate to next/previous image using ImageHandler
         direction: 1 for next, -1 for previous"""
         if not self.ann_handler.check_unsaved_changes():
             return
-            
-        current_row = self.label_panel.file_list.currentRow()
-        target_row = current_row + direction
         
-        if 0 <= target_row < self.label_panel.file_list.count():
-            self.label_panel.file_list.setCurrentRow(target_row)
-            self.load_image_from_list(self.label_panel.file_list.item(target_row))
+        # Check if we have images available
+        if not self.image_handler.image_paths:
+            self.logger.debug("[BBoxAnnotationTool] No images available for navigation", "Navigation")
+            return
+            
+        try:
+            if direction == 1:
+                self.image_handler.go_to_next_image()
+            elif direction == -1:
+                self.image_handler.go_to_previous_image()
+        except (ValueError, IndexError) as e:
+            # No more images in that direction or no images loaded
+            self.logger.debug(f"[BBoxAnnotationTool] Navigation failed: {str(e)}", "Navigation")
 
     def on_annotation_selected(self, index, label):
         """Handle selection change from AnnotationHandler"""
@@ -499,6 +503,40 @@ class BBoxAnnotationTool(QMainWindow):
     def on_label_changed(self, label):
         """Handle current label change from LabelHandler"""
         self.label_panel.set_current_label(label)
+    
+    def on_image_changed(self, image):
+        """Handle image change from ImageHandler."""
+        self.update_display()
+        if image is not None:
+            self.logger.debug(f"[BBoxAnnotationTool] Image loaded with shape: {image.shape}", "Image")
+
+    def on_image_path_changed(self, image_path):
+        """Handle image path change from ImageHandler."""
+        if image_path:
+            self.cancel_current_action()
+            self.ann_handler.load_annotations(image_path)
+            self.label_panel.update_used_labels(self.label_handler.get_all_unique_labels())
+            
+            # Update file list selection to match current image
+            if self.image_handler.image_paths:
+                for i in range(self.label_panel.file_list.count()):
+                    item = self.label_panel.file_list.item(i)
+                    if item.text() == Path(image_path).name:
+                        self.label_panel.file_list.setCurrentRow(i)
+                        break
+        else:
+            self.ann_handler.reset()
+
+    def on_image_paths_changed(self, image_paths):
+        """Handle image paths change from ImageHandler."""
+        if image_paths:
+            # Get annotated files
+            annotated_files = set()
+            for file_path in image_paths:
+                if Path(self.ann_handler.get_annotation_path(file_path)).exists():
+                    annotated_files.add(file_path)
+            
+            self.label_panel.update_file_list(image_paths, annotated_files)
     
 def main():
     """Main entry point for the application."""

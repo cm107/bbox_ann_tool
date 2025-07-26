@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QComboBox, QDialogButtonBox,
 
 if TYPE_CHECKING:
     from .ann_handler import AnnotationHandler
+from .logger import logger
 
 class LabelHandler(QObject):
     """
@@ -34,14 +35,13 @@ class LabelHandler(QObject):
     label_deleted = pyqtSignal(str)  # A label was deleted
     label_renamed = pyqtSignal(str, str)  # old_label, new_label
     
-    def __init__(self, settings, logger, parent=None):
+    def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.settings = settings
-        self.logger = logger
         self._current_label = ""
         self._ann_handler = None
         
-        self.logger.debug("[LabelHandler] Initialized", "Init")
+        logger.debug("[LabelHandler] Initialized", "Init")
         
     def setup(self) -> None:
         """
@@ -55,10 +55,10 @@ class LabelHandler(QObject):
                     self._ann_handler = child
                     break
             if not self._ann_handler:
-                self.logger.error("[LabelHandler] Could not find AnnotationHandler", "Init")
+                logger.error("[LabelHandler] Could not find AnnotationHandler", "Init")
                 raise RuntimeError("[LabelHandler] Could not find AnnotationHandler in parent's children")
         
-        self.logger.debug("[LabelHandler] Setup complete", "Init")
+        logger.debug("[LabelHandler] Setup complete", "Init")
     
     @property
     def current_label(self) -> str:
@@ -139,7 +139,7 @@ class LabelHandler(QObject):
         from PyQt5.QtCore import Qt  # Add Qt import at the top
         
         label_list.clear()
-        self.logger.debug(f"[LabelHandler] Updating label list, group_similar={group_similar}", "UI")
+        logger.debug(f"[LabelHandler] Updating label list, group_similar={group_similar}", "UI")
         
         if group_similar:
             # Group similar labels and show counts

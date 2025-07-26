@@ -170,3 +170,6 @@ class LogViewerDialog(QDialog):
             filtered_logs.append(line)
         
         self.log_display.setText(''.join(filtered_logs))
+
+logger = BBoxLogger()
+logger.info("Logger initialized", category="Logger")

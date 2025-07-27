@@ -20,6 +20,7 @@ from PyQt5.Qt import PYQT_VERSION_STR
 from .logger import BBoxLogger, LogViewerDialog
 from .appearance import AppearanceDialog
 from .ann_handler import AnnotationHandler
+from .annotation import BBox
 from .label_handler import LabelHandler
 from .image_handler import ImageHandler
 from .ui import ImagePanel, LabelPanel
@@ -55,6 +56,10 @@ class BBoxAnnotationTool(QMainWindow):
         
         # Initialize state variables
         # (ImageHandler now manages image state)
+        
+        # Store preview coordinates during dragging
+        self.drag_preview_index = None
+        self.drag_preview_bbox = None
         
         # Set up UI and handlers
         self.init_ui()
@@ -110,7 +115,6 @@ class BBoxAnnotationTool(QMainWindow):
         """Set up signal handlers and connections."""
         # Set up handler references
         self.label_handler.setup()
-        self.ann_handler.setup()
         
         # Connect image handler signals
         self.image_handler.current_image_changed.connect(self.on_image_changed)
@@ -119,12 +123,13 @@ class BBoxAnnotationTool(QMainWindow):
         
         # Connect handler signals
         self.ann_handler.annotations_changed.connect(self.on_annotations_changed)
-        self.ann_handler.bbox_modified.connect(self.update_display)
-        self.ann_handler.selection_changed.connect(self.on_annotation_selected)
-        self.ann_handler.unsaved_changes.connect(self.on_unsaved_changes)
+        # Note: New AnnotationHandler doesn't have bbox_modified signal - handled via annotations_changed
+        self.ann_handler.selected_index_changed.connect(lambda idx: self.on_annotation_selected(idx, self.ann_handler.selected_annotation.label if self.ann_handler.selected_annotation else ""))
+        self.ann_handler.annotation_unselected.connect(lambda: self.on_annotation_selected(-1, ""))
+        self.ann_handler.unsaved_changes_state_changed.connect(self.on_unsaved_changes)
         
         self.label_handler.label_changed.connect(self.on_label_changed)
-        self.label_handler.label_renamed.connect(self.ann_handler.rename_label)
+        # Note: New AnnotationHandler doesn't have rename_label method - handled differently
         
         # Connect UI panel signals
         self.image_panel.mode_changed.connect(self.set_mode)
@@ -143,8 +148,9 @@ class BBoxAnnotationTool(QMainWindow):
         self.label_panel.file_list.itemClicked.connect(self.load_image_from_list)
         
         # Connect controllers
-        self.drawing_controller.bbox_created.connect(self.ann_handler.add_annotation)
-        self.editing_controller.bbox_modified.connect(self.ann_handler.update_annotation)
+        self.drawing_controller.bbox_created.connect(self.on_bbox_created)
+        self.editing_controller.bbox_modified.connect(self.on_bbox_modified)
+        self.editing_controller.bbox_preview.connect(self.on_bbox_preview)
 
     def load_image(self):
         if not self.ann_handler.check_unsaved_changes():
@@ -209,7 +215,8 @@ class BBoxAnnotationTool(QMainWindow):
 
     def save_annotations(self):
         """Save annotations using the AnnotationHandler"""
-        if self.ann_handler.save_annotations():
+        try:
+            self.ann_handler.save_annotations()
             # Update file list icon
             image_path = self.image_handler.current_image_path
             if image_path:
@@ -220,7 +227,29 @@ class BBoxAnnotationTool(QMainWindow):
                         break
                 
                 self.logger.status(f"[BBoxAnnotationTool] Saved annotations for {Path(image_path).name}")
-                self.logger.info(f"[BBoxAnnotationTool] Saved annotations to {self.ann_handler.get_annotation_path()}", "FileOps")
+                self.logger.info(f"[BBoxAnnotationTool] Saved annotations to {self.ann_handler.current_ann_path}", "FileOps")
+        except Exception as e:
+            self.logger.error(f"[BBoxAnnotationTool] Failed to save annotations: {str(e)}", "FileOps")
+            QMessageBox.critical(self, "Error", f"Failed to save annotations: {str(e)}")
+
+    def _convert_annotations_for_display(self, annotations):
+        """Convert new annotation format to old format for renderer compatibility."""
+        if annotations is None:
+            return []
+        converted = []
+        for i, ann in enumerate(annotations):
+            if hasattr(ann, 'p0') and hasattr(ann, 'p1'):  # BBox annotation
+                # Use preview coordinates if this annotation is being dragged
+                if self.drag_preview_index == i and self.drag_preview_bbox is not None:
+                    x1, y1, x2, y2 = self.drag_preview_bbox
+                else:
+                    x1, y1 = ann.p0
+                    x2, y2 = ann.p1
+                converted.append({
+                    "label": ann.label,
+                    "bbox": [int(x1), int(y1), int(x2), int(y2)]
+                })
+        return converted
 
     def update_display(self):
         """Update the display with current annotations."""
@@ -229,12 +258,15 @@ class BBoxAnnotationTool(QMainWindow):
             self.image_panel.display_image(None)
             return
 
+        # Convert annotations to old format for renderer
+        display_annotations = self._convert_annotations_for_display(self.ann_handler.annotations)
+
         # Handle preview during drawing
         if self.drawing_controller.drawing:
             start_point, end_point = self.drawing_controller.get_current_bbox()
             preview = self.renderer.render_preview(
                 current_image,
-                self.ann_handler.annotations,
+                display_annotations,
                 start_point,
                 end_point,
                 self.label_panel.get_current_label()
@@ -245,7 +277,7 @@ class BBoxAnnotationTool(QMainWindow):
         # Normal display with annotations
         image = self.renderer.render_image(
             current_image,
-            self.ann_handler.annotations,
+            display_annotations,
             self.label_handler.current_label,
             self.ann_handler.selected_index,
             self.label_panel.group_labels_cb.isChecked(),
@@ -266,6 +298,9 @@ class BBoxAnnotationTool(QMainWindow):
             self.drawing_controller.drawing = False
         if self.editing_controller.dragging:
             self.editing_controller.finish_dragging()
+        # Clear any preview coordinates
+        self.drag_preview_index = None
+        self.drag_preview_bbox = None
         self.label_panel.clear_selection()
         self.update_display()
 
@@ -273,6 +308,40 @@ class BBoxAnnotationTool(QMainWindow):
         """Select an existing label from the list."""
         self.label_handler.current_label = label
         self.label_panel.set_current_label(label)
+
+    def on_bbox_created(self, bbox, label):
+        """Handle bbox creation from DrawingController."""
+        # Convert from old format [x1, y1, x2, y2] to new BBox object
+        import numpy as np
+        x1, y1, x2, y2 = bbox
+        p0 = np.array([x1, y1], dtype=np.float32)
+        p1 = np.array([x2, y2], dtype=np.float32)
+        bbox_obj = BBox(label, p0, p1)
+        self.ann_handler.add_annotation(bbox_obj)
+
+    def on_bbox_modified(self, index, new_bbox):
+        """Handle bbox modification from EditingController."""
+        # Clear preview coordinates when final modification is complete
+        self.drag_preview_index = None
+        self.drag_preview_bbox = None
+        
+        # Convert from old format [x1, y1, x2, y2] and update the existing annotation
+        import numpy as np
+        x1, y1, x2, y2 = new_bbox
+        p0 = np.array([x1, y1], dtype=np.float32)
+        p1 = np.array([x2, y2], dtype=np.float32)
+        
+        # Update the selected annotation's bbox coordinates
+        if self.ann_handler.selected_index == index:
+            self.ann_handler.edit_selected_annotation('p0', p0)
+            self.ann_handler.edit_selected_annotation('p1', p1)
+
+    def on_bbox_preview(self, index, new_bbox):
+        """Handle bbox preview during dragging - provides visual feedback without triggering edit signals."""
+        # Store preview coordinates for display
+        self.drag_preview_index = index
+        self.drag_preview_bbox = new_bbox
+        self.update_display()
 
     def on_annotations_changed(self):
         """Handle changes to annotations."""
@@ -483,27 +552,6 @@ class BBoxAnnotationTool(QMainWindow):
             # No more images in that direction or no images loaded
             self.logger.debug(f"[BBoxAnnotationTool] Navigation failed: {str(e)}", "Navigation")
 
-    def on_annotation_selected(self, index, label):
-        """Handle selection change from AnnotationHandler"""
-        if index >= 0:
-            # Update label list selection
-            for i in range(self.label_panel.label_list.count()):
-                item = self.label_panel.label_list.item(i)
-                if item.data(Qt.UserRole + 1) == index:
-                    self.label_panel.label_list.setCurrentItem(item)
-                    break
-        else:
-            self.label_panel.label_list.clearSelection()
-        self.update_display()
-    
-    def on_unsaved_changes(self, has_changes):
-        """Handle unsaved changes state from AnnotationHandler"""
-        self.setWindowTitle(f"BBox Annotation Tool {'*' if has_changes else ''}")
-    
-    def on_label_changed(self, label):
-        """Handle current label change from LabelHandler"""
-        self.label_panel.set_current_label(label)
-    
     def on_image_changed(self, image):
         """Handle image change from ImageHandler."""
         self.update_display()
@@ -514,7 +562,11 @@ class BBoxAnnotationTool(QMainWindow):
         """Handle image path change from ImageHandler."""
         if image_path:
             self.cancel_current_action()
-            self.ann_handler.load_annotations(image_path)
+            # Set annotation path which will trigger loading
+            output_dir = self.settings.value("output_dir", os.path.join(os.getcwd(), "output"))
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            ann_path = str(Path(output_dir) / f"{Path(image_path).stem}.json")
+            self.ann_handler.current_ann_path = ann_path
             self.label_panel.update_used_labels(self.label_handler.get_all_unique_labels())
             
             # Update file list selection to match current image
@@ -532,8 +584,10 @@ class BBoxAnnotationTool(QMainWindow):
         if image_paths:
             # Get annotated files
             annotated_files = set()
+            output_dir = self.settings.value("output_dir", os.path.join(os.getcwd(), "output"))
             for file_path in image_paths:
-                if Path(self.ann_handler.get_annotation_path(file_path)).exists():
+                ann_path = str(Path(output_dir) / f"{Path(file_path).stem}.json")
+                if Path(ann_path).exists():
                     annotated_files.add(file_path)
             
             self.label_panel.update_file_list(image_paths, annotated_files)

@@ -83,10 +83,15 @@ class LabelHandler(QObject):
                 try:
                     with open(file, 'r') as f:
                         data = json.load(f)
-                        if isinstance(data, list):
-                            # Old format doesn't have labels
-                            continue
-                        for ann in data.get("annotations", []):
+                        
+                    # Handle new format (direct list of annotations)
+                    if isinstance(data, list):
+                        for ann in data:
+                            if isinstance(ann, dict) and ann.get("label"):
+                                labels.add(ann["label"])
+                    # Handle old format (with "annotations" key)
+                    elif isinstance(data, dict) and "annotations" in data:
+                        for ann in data["annotations"]:
                             if ann.get("label"):
                                 labels.add(ann["label"])
                 except (json.JSONDecodeError, FileNotFoundError):
@@ -145,8 +150,16 @@ class LabelHandler(QObject):
             # Group similar labels and show counts
             label_counts = {}
             for ann in self.ann_handler.annotations:
-                if ann["label"]:
-                    label_counts[ann["label"]] = label_counts.get(ann["label"], 0) + 1
+                # Handle both old dict format and new BBox object format
+                if hasattr(ann, 'label'):  # New BBox object format
+                    label = ann.label
+                elif isinstance(ann, dict) and "label" in ann:  # Old dict format
+                    label = ann["label"]
+                else:
+                    continue
+                    
+                if label:
+                    label_counts[label] = label_counts.get(label, 0) + 1
             
             for label, count in label_counts.items():
                 text = f"{label} ({count})" if count > 1 else label
@@ -156,9 +169,17 @@ class LabelHandler(QObject):
         else:
             # Show all annotations separately
             for i, ann in enumerate(self.ann_handler.annotations):
-                if ann["label"]:
-                    text = f"{ann['label']} #{i+1}"
+                # Handle both old dict format and new BBox object format
+                if hasattr(ann, 'label'):  # New BBox object format
+                    label = ann.label
+                elif isinstance(ann, dict) and "label" in ann:  # Old dict format
+                    label = ann["label"]
+                else:
+                    continue
+                    
+                if label:
+                    text = f"{label} #{i+1}"
                     item = QListWidgetItem(text)
-                    item.setData(Qt.UserRole, ann["label"])
+                    item.setData(Qt.UserRole, label)
                     item.setData(Qt.UserRole + 1, i)  # Store annotation index
                     label_list.addItem(item)

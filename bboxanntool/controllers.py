@@ -52,6 +52,7 @@ class DrawingController(QObject):
 class EditingController(QObject):
     """Controls edit mode interactions."""
     bbox_modified = pyqtSignal(int, list)  # bbox index and new coordinates
+    bbox_preview = pyqtSignal(int, list)  # bbox index and preview coordinates during dragging
 
     def __init__(self, settings):
         super().__init__()
@@ -61,13 +62,16 @@ class EditingController(QObject):
         self.selected_point = None
         self.point_size = int(settings.value("points_size", 6))
         self.initial_bbox = None  # Store initial bbox for logging
+        self.current_drag_bbox = None  # Store current dragging coordinates
 
     def find_control_point(self, click_pos, annotations):
         """Find which control point was clicked."""
         click_x, click_y = click_pos
         
         for bbox_idx, bbox_data in enumerate(annotations):
-            x1, y1, x2, y2 = bbox_data["bbox"]
+            # Get coordinates from BBox object
+            x1, y1 = bbox_data.p0[0], bbox_data.p0[1]
+            x2, y2 = bbox_data.p1[0], bbox_data.p1[1]
             center = ((x1 + x2) // 2, (y1 + y2) // 2)
             points = [
                 (x1, y1),  # Top-left (0)
@@ -108,8 +112,10 @@ class EditingController(QObject):
         if bbox_idx >= len(annotations):
             return False
 
-        bbox = annotations[bbox_idx]["bbox"]
-        x1, y1, x2, y2 = bbox
+        # Get coordinates from BBox object
+        bbox_obj = annotations[bbox_idx]
+        x1, y1 = bbox_obj.p0[0], bbox_obj.p0[1]
+        x2, y2 = bbox_obj.p1[0], bbox_obj.p1[1]
         dx = point[0] - self.drag_start[0]
         dy = point[1] - self.drag_start[1]
         
@@ -126,25 +132,37 @@ class EditingController(QObject):
             elif point_idx == 3:  # Bottom-left
                 x1, y2 = point
         
-        # Update bbox with new coordinates
+        # Store current bbox for preview and final update
         new_bbox = [
             min(x1, x2), min(y1, y2),
             max(x1, x2), max(y1, y2)
         ]
-        self.bbox_modified.emit(bbox_idx, new_bbox)
+        self.current_drag_bbox = new_bbox
+        
+        # Emit preview signal for visual feedback during dragging
+        self.bbox_preview.emit(bbox_idx, new_bbox)
         self.drag_start = point
         return True
 
     def finish_dragging(self):
         """Finish dragging operation."""
-        if self.dragging and logger and self.initial_bbox:
-            point_idx, point_name = self.initial_bbox
-            if point_idx == 4:
-                logger.info(f"[EditingController] Moved bbox {self.selected_point[0]} by dragging center point", "Annotations")
-            else:
-                logger.info(f"[EditingController] Resized bbox {self.selected_point[0]} by dragging {point_name} point", "Annotations")
+        was_dragging = self.dragging
+        
+        if was_dragging and self.selected_point is not None and self.current_drag_bbox is not None:
+            # Emit the final bbox_modified signal only when dragging is complete
+            bbox_idx, _ = self.selected_point
+            self.bbox_modified.emit(bbox_idx, self.current_drag_bbox)
+            
+            # Log the operation
+            if logger and self.initial_bbox:
+                point_idx, point_name = self.initial_bbox
+                if point_idx == 4:
+                    logger.info(f"[EditingController] Moved bbox {bbox_idx} by dragging center point", "Annotations")
+                else:
+                    logger.info(f"[EditingController] Resized bbox {bbox_idx} by dragging {point_name} point", "Annotations")
         
         self.dragging = False
         self.drag_start = None
         self.selected_point = None
         self.initial_bbox = None
+        self.current_drag_bbox = None

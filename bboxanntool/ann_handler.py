@@ -230,9 +230,17 @@ class AnnotationHandler(QObject):
             logger.warning("[AnnotationHandler] No annotation selected to delete", "Warning")
             return
 
-        ann = self._annotations.pop(self._selected_index)
-        idx = self._selected_index; label = ann.label
-        self.select_annotation(None)  # Clear selection after deletion
+        # Remove the annotation at the selected index
+        idx = self._selected_index
+        ann = self._annotations.pop(idx)
+        label = ann.label
+        # Clear selection first so UI knows nothing is selected now
+        self.select_annotation(None)
+        # Record unsaved changes & notify listeners
+        self._set_has_unsaved_changes(True)
+        # Notify that the annotations collection changed so UI (label list) refreshes
+        self.annotations_changed.emit()
+        # Finally emit specific deletion event (tests wait for this)
         self.annotation_deleted.emit(idx, label)
 
     def delete_annotations_by_label(self, label: str):
@@ -242,21 +250,47 @@ class AnnotationHandler(QObject):
             raise ValueError("Annotations must be loaded before deleting by label")
         
         deleted_idx_list = []
-        for idx in list(range(len(self._annotations)))[::-1]:
+        # Iterate in reverse so indices remain valid while deleting
+        for idx in range(len(self._annotations) - 1, -1, -1):
             if self._annotations[idx].label == label:
                 del self._annotations[idx]
+                # Adjust / clear selection
                 if self._selected_index is not None:
-                    if self._selected_index >= idx:
-                        self._selected_index -= 1
-                    elif self._selected_index == idx:
+                    if self._selected_index == idx:
                         self.select_annotation(None)
+                    elif self._selected_index > idx:
+                        self._selected_index -= 1
                 deleted_idx_list.append(idx)
-        if len(deleted_idx_list) > 0:
+        if deleted_idx_list:
             deleted_idx_list.sort()
             self._set_has_unsaved_changes(True)
             self.annotations_changed.emit()
             for idx in deleted_idx_list:
                 self.annotation_deleted.emit(idx, label)
+
+    def rename_annotations_by_label(self, old_label: str, new_label: str):
+        """Rename all annotations that have a given old_label to new_label."""
+        if self._annotations is None:
+            logger.error("[AnnotationHandler] Can't rename annotations before loading annotations", "Error")
+            raise ValueError("Annotations must be loaded before renaming by label")
+        if old_label == new_label:
+            logger.debug("[AnnotationHandler] Old and new label are the same, skipping bulk rename", "State")
+            return
+        changed_indices = []
+        for idx, ann in enumerate(self._annotations):
+            # Support both object and dict legacy format
+            label = getattr(ann, 'label', ann.get('label') if isinstance(ann, dict) else None)
+            if label == old_label:
+                if hasattr(ann, 'label'):
+                    ann.label = new_label
+                elif isinstance(ann, dict):
+                    ann['label'] = new_label
+                changed_indices.append(idx)
+        if changed_indices:
+            self._set_has_unsaved_changes(True)
+            self.annotations_changed.emit()
+            for idx in changed_indices:
+                self.annotation_renamed.emit(idx, old_label, new_label)
 
     def check_unsaved_changes(self):
         """

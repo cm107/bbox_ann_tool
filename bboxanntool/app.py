@@ -492,13 +492,14 @@ class BBoxAnnotationTool(QMainWindow):
         old_label = item.data(Qt.UserRole)
         new_label = self.label_handler.edit_label_dialog(old_label)
         if new_label:
-            if item.data(Qt.UserRole + 1) is not None:  # Individual mode
-                self.ann_handler.update_annotation(
-                    item.data(Qt.UserRole + 1), 
-                    label=new_label
-                )
-            else:  # Group mode
-                self.ann_handler.rename_label(old_label, new_label)
+            # Determine if we're in individual (non-group) mode by presence of index
+            index = item.data(Qt.UserRole + 1)
+            if index is not None:  # Individual annotation item
+                # Select the annotation then rename via handler API
+                self.ann_handler.select_annotation(index)
+                self.ann_handler.rename_selected_annotation(new_label)
+            else:  # Group mode item: bulk rename
+                self.ann_handler.rename_annotations_by_label(old_label, new_label)
 
     def delete_label(self, item):
         msg_box = QMessageBox()
@@ -510,7 +511,7 @@ class BBoxAnnotationTool(QMainWindow):
             msg_box.setText(f"Delete annotation '{item.text()}'?")
         else:  # Group mode
             label = item.data(Qt.UserRole)
-            count = sum(1 for ann in self.ann_handler.annotations if ann["label"] == label)
+            count = sum(1 for ann in (self.ann_handler.annotations or []) if getattr(ann, 'label', ann.get('label') if isinstance(ann, dict) else None) == label)
             msg_box.setText(f"Delete all {count} annotations with label '{label}'?")
         
         msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
@@ -518,19 +519,35 @@ class BBoxAnnotationTool(QMainWindow):
         
         if msg_box.exec_() == QMessageBox.Yes:
             if index is not None and index >= 0:  # Individual mode and valid index
-                # Get the text before deleting the annotation, as the item might be deleted
-                # by the signal chain
+                # Validate index against current annotations length
+                if not self.ann_handler.annotations or index >= len(self.ann_handler.annotations):
+                    self.logger.warning(f"[BBoxAnnotationTool] Annotation index {index} no longer valid for deletion", "Annotations")
+                    return
+                # If already selected & same index, proceed; else select then delete
+                if self.ann_handler.selected_index != index:
+                    try:
+                        self.ann_handler.select_annotation(index)
+                    except IndexError:
+                        self.logger.warning(f"[BBoxAnnotationTool] Failed to select annotation {index} for deletion; index invalid", "Annotations")
+                        return
                 item_text = item.text()
-                self.ann_handler.delete_annotation(index)
+                self.ann_handler.delete_selected_annotation()
                 self.logger.status(f"[BBoxAnnotationTool] Deleted annotation: {item_text}")
                 self.logger.info(f"[BBoxAnnotationTool] Deleted single annotation: {item_text}", "Annotations")
             elif index is None:  # Group mode
                 label = item.data(Qt.UserRole)
-                count_before = len(self.ann_handler.annotations)
+                count_before = len(self.ann_handler.annotations or [])
                 self.ann_handler.delete_annotations_by_label(label)
-                count_deleted = count_before - len(self.ann_handler.annotations)
+                count_deleted = count_before - len(self.ann_handler.annotations or [])
                 self.logger.status(f"[BBoxAnnotationTool] Deleted {count_deleted} annotations with label: {label}")
                 self.logger.info(f"[BBoxAnnotationTool] Deleted {count_deleted} annotations with label: {label}", "Annotations")
+            # After any deletion ensure UI list is refreshed & selection cleared
+            self.label_handler.update_label_list(
+                self.label_panel.label_list,
+                self.label_panel.group_labels_cb.isChecked()
+            )
+            self.label_panel.clear_selection()
+            self.update_display()
 
     def navigate_to_image(self, direction):
         """Navigate to next/previous image using ImageHandler

@@ -44,7 +44,13 @@ class Viewport(QObject):
         """
         Offset in pixels from the top-left corner of the canvas to the center of the viewport.
         """
-    
+        # Track the base (fit-to-window) zoom so we don't allow zooming out past it (causes image/annotation scale mismatch)
+        self._baseZoomScale: float | None = None
+        """
+        Base zoom scale used to fit the entire image within the viewport.
+        This is the zoom level where the image just fits within the viewport,
+        without any panning or cropping.
+        """    
     @property
     def size(self) -> npt.NDArray[np.int32] | None:
         """
@@ -130,6 +136,7 @@ class Viewport(QObject):
             self._canvasSize = None
             self._zoomScale = None
             self._offset = None
+            self._baseZoomScale = None
         else:
             _val = np.array(image.shape[:2][::-1], dtype=np.int32)
             self._canvasSize = _val
@@ -142,6 +149,8 @@ class Viewport(QObject):
                 self._zoomScale = min(scale_w, scale_h)  # may be <1 (zoomed out) or >1 (zoomed in)
             else:
                 self._zoomScale = 1.0
+            # record base (minimum) zoom only if it is < 1 (image larger than viewport). For small images we allow zooming out below this.
+            self._baseZoomScale = self._zoomScale if self._zoomScale is not None else None
             # center viewport on image
             self._offset = (self._canvasSize / 2).astype(np.int32)
         self.modified.emit()
@@ -170,9 +179,12 @@ class Viewport(QObject):
             p1=np.array([roi_x + roi_width, roi_y + roi_height], dtype=np.float32)
         )
 
-    def image_to_viewport_coords(self, p: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
+    def image_to_viewport_coords(self, p: npt.NDArray[np.float32], clamp: bool = True) -> npt.NDArray[np.float32]:
         """Convert a point (x,y) in image/canvas coordinates to viewport pixel coordinates.
-        Uses same scale/padding logic as crop_and_resize so the mapping matches what is displayed.
+        When clamp=True (default) the point is constrained to the effective cropped region (legacy behavior).
+        When clamp=False the raw (possibly outside) ROI-relative position is used so callers can
+        test visibility (e.g., skip drawing annotations entirely outside viewport).
+        Updated small-image padding handling preserved.
         """
         if self._canvasSize is None or self._zoomScale is None or self._offset is None:
             raise ValueError("Canvas not set up.")
@@ -180,34 +192,65 @@ class Viewport(QObject):
             raise ValueError("Point must be shape (2,)")
         roi = self.roi
         roi_x, roi_y = roi.p0.astype(np.float32)
-        roi_w = roi.width
-        roi_h = roi.height
-        # scale chosen to fit entire ROI inside viewport preserving aspect
+        roi_w = float(roi.width)
+        roi_h = float(roi.height)
+        canvas_w, canvas_h = self._canvasSize.astype(np.float32)
+        # Effective cropped region actually sampled from image (clamp to canvas size)
+        eff_w = min(roi_w, canvas_w - roi_x)
+        eff_h = min(roi_h, canvas_h - roi_y)
+        eff_w = max(eff_w, 1.0)
+        eff_h = max(eff_h, 1.0)
         vw, vh = self.size.astype(np.float32)
-        scale = min(vw / roi_w, vh / roi_h)
-        pad_x = (vw - roi_w * scale) / 2.0
-        pad_y = (vh - roi_h * scale) / 2.0
-        vx = (p[0] - roi_x) * scale + pad_x
-        vy = (p[1] - roi_y) * scale + pad_y
+        scale = min(vw / eff_w, vh / eff_h)
+        target_w = int(eff_w * scale)
+        target_h = int(eff_h * scale)
+        eff_scale_x = target_w / eff_w
+        eff_scale_y = target_h / eff_h
+        pad_x = (int(vw) - target_w) // 2
+        pad_y = (int(vh) - target_h) // 2
+        # Raw relative (no clamp) displacement within ROI
+        rel_x_raw = p[0] - roi_x
+        rel_y_raw = p[1] - roi_y
+        if clamp:
+            rel_x = np.clip(rel_x_raw, 0, eff_w)
+            rel_y = np.clip(rel_y_raw, 0, eff_h)
+        else:
+            rel_x = rel_x_raw
+            rel_y = rel_y_raw
+        vx = rel_x * eff_scale_x + pad_x
+        vy = rel_y * eff_scale_y + pad_y
         return np.array([vx, vy], dtype=np.float32)
 
     def viewport_to_image_coords(self, p: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
-        """Convert a point (x,y) in viewport pixel coordinates to image/canvas coordinates.
-        Inverse of image_to_viewport_coords (within displayed region)."""
+        """Inverse of image_to_viewport_coords with identical small-image padding handling."""
         if self._canvasSize is None or self._zoomScale is None or self._offset is None:
             raise ValueError("Canvas not set up.")
         if p.shape != (2,):
             raise ValueError("Point must be shape (2,)")
         roi = self.roi
         roi_x, roi_y = roi.p0.astype(np.float32)
-        roi_w = roi.width
-        roi_h = roi.height
+        roi_w = float(roi.width)
+        roi_h = float(roi.height)
+        canvas_w, canvas_h = self._canvasSize.astype(np.float32)
+        eff_w = min(roi_w, canvas_w - roi_x)
+        eff_h = min(roi_h, canvas_h - roi_y)
+        eff_w = max(eff_w, 1.0)
+        eff_h = max(eff_h, 1.0)
         vw, vh = self.size.astype(np.float32)
-        scale = min(vw / roi_w, vh / roi_h)
-        pad_x = (vw - roi_w * scale) / 2.0
-        pad_y = (vh - roi_h * scale) / 2.0
-        ix = (p[0] - pad_x) / scale + roi_x
-        iy = (p[1] - pad_y) / scale + roi_y
+        scale = min(vw / eff_w, vh / eff_h)
+        target_w = int(eff_w * scale)
+        target_h = int(eff_h * scale)
+        eff_scale_x = target_w / eff_w
+        eff_scale_y = target_h / eff_h
+        pad_x = (int(vw) - target_w) // 2
+        pad_y = (int(vh) - target_h) // 2
+        # Remove padding then divide by scale, clamp to eff region
+        rel_x = (p[0] - pad_x) / eff_scale_x
+        rel_y = (p[1] - pad_y) / eff_scale_y
+        rel_x = np.clip(rel_x, 0, eff_w)
+        rel_y = np.clip(rel_y, 0, eff_h)
+        ix = rel_x + roi_x
+        iy = rel_y + roi_y
         return np.array([ix, iy], dtype=np.float32)
 
     def crop_and_resize(self, img: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
@@ -264,12 +307,14 @@ class Viewport(QObject):
             raise ValueError("Canvas is not set up for zooming. Call setup_canvas_for_image first.")
         if center is None:
             center = np.array([self.size[0] / 2, self.size[1] / 2], dtype=np.float32)
-        # canvas coord of focal point before zoom
         roi_half = (self.size / (2 * self._zoomScale))
         center_canvas = self._offset - roi_half + (center / self._zoomScale)
         # apply zoom
-        self._zoomScale *= magnification
-        # recompute offset so focal point stays under cursor
+        proposed = self._zoomScale * magnification
+        # Clamp so we cannot zoom out past the fit-to-window scale when the image is larger than the viewport (baseZoomScale < 1)
+        if self._baseZoomScale is not None and self._baseZoomScale < 1 and proposed < self._baseZoomScale:
+            proposed = self._baseZoomScale
+        self._zoomScale = proposed
         roi_half_new = (self.size / (2 * self._zoomScale))
         self._offset = (center_canvas - (center / self._zoomScale) + roi_half_new).astype(np.int32)
         self._clamp_offset()

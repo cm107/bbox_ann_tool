@@ -5,10 +5,6 @@ import cv2
 import os
 from pathlib import Path
 
-import sys
-import cv2
-import os
-from pathlib import Path
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout,
                            QMenuBar, QMenu, QAction, QDialog, QFileDialog,
                            QMessageBox, QShortcut)
@@ -79,7 +75,8 @@ class BBoxAnnotationTool(QMainWindow):
             self.settings,
             drawing_controller=self.drawing_controller,
             editing_controller=self.editing_controller,
-            ann_handler=self.ann_handler
+            ann_handler=self.ann_handler,
+            label_handler=self.label_handler  # pass label handler so draw mode works
         )
         self.label_panel = LabelPanel(ann_handler=self.ann_handler)
         
@@ -257,40 +254,40 @@ class BBoxAnnotationTool(QMainWindow):
         if current_image is None:
             self.image_panel.display_image(None)
             return
-
-        # Convert annotations to old format for renderer
-        display_annotations = self._convert_annotations_for_display(self.ann_handler.annotations)
-
-        # Handle preview during drawing
+        # Ensure image set (only when changed) handled elsewhere; here just update overlay state
+        if self.image_panel.ann_canvas.image is not current_image:
+            self.image_panel.display_image(current_image)
+        # Build drawing preview
+        drawing_preview = None
         if self.drawing_controller.drawing:
-            start_point, end_point = self.drawing_controller.get_current_bbox()
-            preview = self.renderer.render_preview(
-                current_image,
-                display_annotations,
-                start_point,
-                end_point,
-                self.label_panel.get_current_label()
-            )
-            self.image_panel.display_image(preview)
-            return
-
-        # Normal display with annotations
-        image = self.renderer.render_image(
-            current_image,
-            display_annotations,
-            self.label_handler.current_label,
+            cur = self.drawing_controller.get_current_bbox()
+            if cur:
+                drawing_preview = cur
+        # Update scene state in annotation canvas
+        self.image_panel.update_scene(
+            self.ann_handler.annotations or [],
             self.ann_handler.selected_index,
+            self.label_handler.current_label,
             self.label_panel.group_labels_cb.isChecked(),
-            self.editing_controller.dragging or self.image_panel.mode_selector.currentText() == "Edit Mode"
+            self.editing_controller.dragging or self.image_panel.mode_selector.currentText() == "Edit Mode",
+            self.drag_preview_index,
+            self.drag_preview_bbox,
+            drawing_preview
         )
-        self.image_panel.display_image(image)
 
     def set_mode(self, edit_mode):
         """Set the current mode (edit/draw)."""
         self.image_panel.set_mode(edit_mode)
-        self.cancel_current_action()
+        # Do not clear label selection (needed for drawing); only cancel active drag/draw
+        if self.drawing_controller.drawing:
+            self.drawing_controller.drawing = False
+        if self.editing_controller.dragging:
+            self.editing_controller.finish_dragging()
+        self.drag_preview_index = None
+        self.drag_preview_bbox = None
         mode = "Edit" if edit_mode else "Draw"
         self.logger.status(f"[BBoxAnnotationTool] Switched to {mode} Mode")
+        self.update_display()
 
     def cancel_current_action(self):
         """Cancel the current drawing/editing action."""
@@ -505,43 +502,32 @@ class BBoxAnnotationTool(QMainWindow):
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Warning)
         msg_box.setWindowTitle("Confirm Delete")
-        
         index = item.data(Qt.UserRole + 1)
         if index is not None:  # Individual mode
             msg_box.setText(f"Delete annotation '{item.text()}'?")
-        else:  # Group mode
+        else:
             label = item.data(Qt.UserRole)
             count = sum(1 for ann in (self.ann_handler.annotations or []) if getattr(ann, 'label', ann.get('label') if isinstance(ann, dict) else None) == label)
             msg_box.setText(f"Delete all {count} annotations with label '{label}'?")
-        
         msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg_box.setDefaultButton(QMessageBox.No)
-        
         if msg_box.exec_() == QMessageBox.Yes:
-            if index is not None and index >= 0:  # Individual mode and valid index
-                # Validate index against current annotations length
-                if not self.ann_handler.annotations or index >= len(self.ann_handler.annotations):
-                    self.logger.warning(f"[BBoxAnnotationTool] Annotation index {index} no longer valid for deletion", "Annotations")
-                    return
-                # If already selected & same index, proceed; else select then delete
+            if index is not None and index >= 0:
+                # Only allow deletion of currently selected annotation per new logic
                 if self.ann_handler.selected_index != index:
+                    # Attempt to select it first; if fails abort
                     try:
                         self.ann_handler.select_annotation(index)
                     except IndexError:
-                        self.logger.warning(f"[BBoxAnnotationTool] Failed to select annotation {index} for deletion; index invalid", "Annotations")
+                        self.logger.warning(f"[BBoxAnnotationTool] Annotation index {index} invalid for deletion", "Annotations")
                         return
-                item_text = item.text()
+                # Proceed to delete selected
                 self.ann_handler.delete_selected_annotation()
-                self.logger.status(f"[BBoxAnnotationTool] Deleted annotation: {item_text}")
-                self.logger.info(f"[BBoxAnnotationTool] Deleted single annotation: {item_text}", "Annotations")
-            elif index is None:  # Group mode
+            else:
+                # Bulk delete by label (group mode)
                 label = item.data(Qt.UserRole)
-                count_before = len(self.ann_handler.annotations or [])
                 self.ann_handler.delete_annotations_by_label(label)
-                count_deleted = count_before - len(self.ann_handler.annotations or [])
-                self.logger.status(f"[BBoxAnnotationTool] Deleted {count_deleted} annotations with label: {label}")
-                self.logger.info(f"[BBoxAnnotationTool] Deleted {count_deleted} annotations with label: {label}", "Annotations")
-            # After any deletion ensure UI list is refreshed & selection cleared
+            # Refresh UI lists
             self.label_handler.update_label_list(
                 self.label_panel.label_list,
                 self.label_panel.group_labels_cb.isChecked()
